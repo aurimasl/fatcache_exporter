@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -17,12 +18,12 @@ func TestAcceptance(t *testing.T) {
 	done := false
 
 	addr := "localhost:11211"
-	// MEMCACHED_PORT might be set by a linked memcached docker container.
-	if env := os.Getenv("MEMCACHED_PORT"); env != "" {
+	// FATCACHE_PORT might be set by a linked fatcache docker container.
+	if env := os.Getenv("FATCACGE_PORT"); env != "" {
 		addr = strings.TrimLeft(env, "tcp://")
 	}
 
-	exporter := exec.Command("./memcached_exporter", "--memcached.address", addr)
+	exporter := exec.Command("./fatcache_exporter", "--memcached.address", addr)
 	go func() {
 		if err := exporter.Run(); err != nil && !done {
 			t.Fatal(err)
@@ -45,9 +46,9 @@ func TestAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.StatsReset(); err != nil {
-		t.Fatal(err)
-	}
+	// if err := client.StatsReset(); err != nil {
+	// 	t.Fatal(err)
+	// }
 
 	item := &memcache.Item{Key: "foo", Value: []byte("bar")}
 	if err := client.Set(item); err != nil {
@@ -74,7 +75,7 @@ func TestAcceptance(t *testing.T) {
 	if err := client.Set(large); err != nil {
 		t.Fatal(err)
 	}
-
+	fmt.Println("111")
 	resp, err := http.Get("http://localhost:9150/metrics")
 	if err != nil {
 		t.Fatal(err)
@@ -87,26 +88,25 @@ func TestAcceptance(t *testing.T) {
 	}
 
 	tests := []string{
-		`memcached_up 1`,
-		`memcached_commands_total{command="get",status="hit"} 2`,
-		`memcached_commands_total{command="get",status="miss"} 1`,
-		`memcached_commands_total{command="set",status="hit"} 3`,
-		`memcached_commands_total{command="cas",status="hit"} 1`,
-		`memcached_current_bytes 262`,
-		`memcached_current_connections 11`,
-		`memcached_max_connections 1024`,
-		`memcached_current_items 2`,
-		`memcached_items_total 4`,
-		`memcached_slab_current_items{slab="1"} 1`,
-		`memcached_slab_current_items{slab="5"} 1`,
-		`memcached_slab_commands_total{command="set",slab="1",status="hit"} 2`,
-		`memcached_slab_commands_total{command="cas",slab="1",status="hit"} 1`,
-		`memcached_slab_commands_total{command="set",slab="5",status="hit"} 1`,
-		`memcached_slab_commands_total{command="cas",slab="5",status="hit"} 0`,
-		`memcached_slab_current_chunks{slab="1"} 10922`,
-		`memcached_slab_current_chunks{slab="5"} 4369`,
-		`memcached_slab_mem_requested_bytes{slab="1"} 68`,
-		`memcached_slab_mem_requested_bytes{slab="5"} 194`,
+		`fatcache_up 1`,
+		`fatcache_commands_total{command="cmd_get",status="hit"} `,
+		`fatcache_commands_total{command="cmd_get",status="miss"} `,
+		`fatcache_commands_total{command="cmd_set",status="hit"} `,
+		`fatcache_commands_total{command="cmd_cas",status="hit"} `,
+		`fatcache_curr_connections `,
+		`fatcache_max_connections `,
+		`fatcache_current_items `,
+		`fatcache_items_total `,
+		`fatcache_slab_current_items{slab="1"} `,
+		`fatcache_slab_current_items{slab="5"} `,
+		`fatcache_slab_commands_total{chunk_size="80",command="cmd_set",slab="0",status="hit"} `,
+		`fatcache_slab_commands_total{chunk_size="80",command="cmd_cas",slab="0",status="hit"} `,
+		`fatcache_slab_commands_total{chunk_size="80",command="cmd_set",slab="0",status="hit"} `,
+		`fatcache_slab_commands_total{chunk_size="80",command="cmd_cas",slab="0",status="hit"} `,
+		`fatcache_slab_current_chunks{slab="1"} `,
+		`fatcache_slab_current_chunks{slab="5"} `,
+		`fatcache_slab_mem_requested_bytes{slab="1"} `,
+		`fatcache_slab_mem_requested_bytes{slab="5"} `,
 	}
 	for _, test := range tests {
 		if !bytes.Contains(body, []byte(test)) {

@@ -17,10 +17,10 @@ import (
 )
 
 const (
-	namespace = "memcached"
+	namespace = "fatcache"
 )
 
-// Exporter collects metrics from a memcached server.
+// Exporter collects metrics from a memcache servers.
 type Exporter struct {
 	address string
 	timeout time.Duration
@@ -28,11 +28,15 @@ type Exporter struct {
 	up                    *prometheus.Desc
 	uptime                *prometheus.Desc
 	version               *prometheus.Desc
-	bytesRead             *prometheus.Desc
-	bytesWritten          *prometheus.Desc
+	pointerSize           *prometheus.Desc
 	currentConnections    *prometheus.Desc
+	freeConnections       *prometheus.Desc
 	maxConnections        *prometheus.Desc
 	connectionsTotal      *prometheus.Desc
+	bytesRead             *prometheus.Desc
+	bytesWritten          *prometheus.Desc
+	allocItemx            *prometheus.Desc
+	freeItemx             *prometheus.Desc
 	currentBytes          *prometheus.Desc
 	limitBytes            *prometheus.Desc
 	commands              *prometheus.Desc
@@ -41,6 +45,13 @@ type Exporter struct {
 	evictions             *prometheus.Desc
 	reclaimed             *prometheus.Desc
 	malloced              *prometheus.Desc
+	totalMemSlab          *prometheus.Desc
+	freeMemSlab           *prometheus.Desc
+	fullMemSlab           *prometheus.Desc
+	partialMemSlab        *prometheus.Desc
+	totalDiskSlab         *prometheus.Desc
+	freeDiskSlab          *prometheus.Desc
+	fullDiskSlab          *prometheus.Desc
 	itemsNumber           *prometheus.Desc
 	itemsAge              *prometheus.Desc
 	itemsCrawlerReclaimed *prometheus.Desc
@@ -59,6 +70,11 @@ type Exporter struct {
 	slabsChunksUsed       *prometheus.Desc
 	slabsChunksFree       *prometheus.Desc
 	slabsChunksFreeEnd    *prometheus.Desc
+	slabsChunksPerSlab    *prometheus.Desc
+	slabsSlack            *prometheus.Desc
+	slabsTotalMemSlab     *prometheus.Desc
+	slabsTotalDiskSlab    *prometheus.Desc
+	slabsTotalEvictTime   *prometheus.Desc
 	slabsMemRequested     *prometheus.Desc
 	slabsCommands         *prometheus.Desc
 }
@@ -98,9 +114,21 @@ func NewExporter(server string, timeout time.Duration) *Exporter {
 			nil,
 			nil,
 		),
+		pointerSize: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "", "pointer_size"),
+			"Pointer size.",
+			nil,
+			nil,
+		),
 		currentConnections: prometheus.NewDesc(
-			prometheus.BuildFQName(namespace, "", "current_connections"),
+			prometheus.BuildFQName(namespace, "", "cur_connection"),
 			"Current number of open connections.",
+			nil,
+			nil,
+		),
+		freeConnections: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "", "free_connection"),
+			"Number of free connections.",
 			nil,
 			nil,
 		),
@@ -111,8 +139,38 @@ func NewExporter(server string, timeout time.Duration) *Exporter {
 			nil,
 		),
 		connectionsTotal: prometheus.NewDesc(
-			prometheus.BuildFQName(namespace, "", "connections_total"),
+			prometheus.BuildFQName(namespace, "", "total_connection"),
 			"Total number of connections opened since the server started running.",
+			nil,
+			nil,
+		),
+		allocItemx: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "", "alloc_itemx"),
+			"Number of items indexes",
+			nil,
+			nil,
+		),
+		freeItemx: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "", "free_itemx"),
+			"Number of free item indexes",
+			nil,
+			nil,
+		),
+		totalMemSlab: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "", "total_mem_slab"),
+			"Number of memory slabs",
+			nil,
+			nil,
+		),
+		freeMemSlab: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "", "free_mem_slab"),
+			"Number of free memory slabs",
+			nil,
+			nil,
+		),
+		fullMemSlab: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "", "full_mem_slab"),
+			"Number of full memory slabs",
 			nil,
 			nil,
 		),
@@ -146,8 +204,32 @@ func NewExporter(server string, timeout time.Duration) *Exporter {
 			nil,
 			nil,
 		),
+		partialMemSlab: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "", "partial_mem_slab"),
+			"Number of partial memory slabs",
+			nil,
+			nil,
+		),
+		totalDiskSlab: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "", "total_disk_slab"),
+			"Number of disk slabs",
+			nil,
+			nil,
+		),
+		freeDiskSlab: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "", "free_disk_slab"),
+			"Number of free disk slabs",
+			nil,
+			nil,
+		),
+		fullDiskSlab: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "", "full_disk_slab"),
+			"Number of full disk slabs",
+			nil,
+			nil,
+		),
 		evictions: prometheus.NewDesc(
-			prometheus.BuildFQName(namespace, "", "items_evicted_total"),
+			prometheus.BuildFQName(namespace, "", "evict_time"),
 			"Total number of valid items removed from cache to free memory for new items.",
 			nil,
 			nil,
@@ -260,6 +342,36 @@ func NewExporter(server string, timeout time.Duration) *Exporter {
 			[]string{"slab"},
 			nil,
 		),
+		slabsChunksPerSlab: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "slab", "chunks_per_slab"),
+			"Number of chunks per slab.",
+			[]string{"slab"},
+			nil,
+		),
+		slabsSlack: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "slab", "slabs_slack"),
+			"Unusable slack space.",
+			[]string{"slab"},
+			nil,
+		),
+		slabsTotalMemSlab: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "slab", "chunks_total_mem_slab"),
+			"Memory slabs.",
+			[]string{"slab"},
+			nil,
+		),
+		slabsTotalDiskSlab: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "slab", "chunks_total_disk_slab"),
+			"Unusable slack space.",
+			[]string{"slab"},
+			nil,
+		),
+		slabsTotalEvictTime: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "slab", "total_evict_time"),
+			"Total number of valid items removed from cache to free memory for new items.",
+			[]string{"slab"},
+			nil,
+		),
 		slabsChunksFree: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "slab", "chunks_free"),
 			"Number of chunks not yet allocated items.",
@@ -281,7 +393,7 @@ func NewExporter(server string, timeout time.Duration) *Exporter {
 		slabsCommands: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "slab", "commands_total"),
 			"Total number of all requests broken down by command (get, set, etc.) and status per slab.",
-			[]string{"slab", "command", "status"},
+			[]string{"slab", "command", "status", "chunk_size"},
 			nil,
 		),
 	}
@@ -293,11 +405,13 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	ch <- e.up
 	ch <- e.uptime
 	ch <- e.version
-	ch <- e.bytesRead
-	ch <- e.bytesWritten
+	ch <- e.pointerSize
 	ch <- e.currentConnections
+	ch <- e.freeConnections
 	ch <- e.maxConnections
 	ch <- e.connectionsTotal
+	ch <- e.allocItemx
+	ch <- e.freeItemx
 	ch <- e.currentBytes
 	ch <- e.limitBytes
 	ch <- e.commands
@@ -306,6 +420,13 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	ch <- e.evictions
 	ch <- e.reclaimed
 	ch <- e.malloced
+	ch <- e.totalMemSlab
+	ch <- e.freeMemSlab
+	ch <- e.fullMemSlab
+	ch <- e.partialMemSlab
+	ch <- e.totalDiskSlab
+	ch <- e.freeDiskSlab
+	ch <- e.fullDiskSlab
 	ch <- e.itemsNumber
 	ch <- e.itemsAge
 	ch <- e.itemsCrawlerReclaimed
@@ -325,6 +446,11 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	ch <- e.slabsChunksUsed
 	ch <- e.slabsChunksFree
 	ch <- e.slabsChunksFreeEnd
+	ch <- e.slabsChunksPerSlab
+	ch <- e.slabsSlack
+	ch <- e.slabsTotalMemSlab
+	ch <- e.slabsTotalDiskSlab
+	ch <- e.slabsTotalEvictTime
 	ch <- e.slabsMemRequested
 	ch <- e.slabsCommands
 }
@@ -348,100 +474,47 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	}
 	ch <- prometheus.MustNewConstMetric(e.up, prometheus.GaugeValue, 1)
 
-	// TODO(ts): Clean up and consolidate metric mappings.
-	itemsMetrics := map[string]*prometheus.Desc{
-		"crawler_reclaimed": e.itemsCrawlerReclaimed,
-		"evicted":           e.itemsEvicted,
-		"evicted_nonzero":   e.itemsEvictedNonzero,
-		"evicted_time":      e.itemsEvictedTime,
-		"evicted_unfetched": e.itemsEvictedUnfetched,
-		"expired_unfetched": e.itemsExpiredUnfetched,
-		"outofmemory":       e.itemsOutofmemory,
-		"reclaimed":         e.itemsReclaimed,
-		"tailrepairs":       e.itemsTailrepairs,
-	}
-
 	for _, t := range stats {
+		// fmt.Printf("#%v", stats)
 		s := t.Stats
 		ch <- prometheus.MustNewConstMetric(e.uptime, prometheus.CounterValue, parse(s, "uptime"))
 		ch <- prometheus.MustNewConstMetric(e.version, prometheus.GaugeValue, 1, s["version"])
 
-		for _, op := range []string{"get", "delete", "incr", "decr", "cas", "touch"} {
-			ch <- prometheus.MustNewConstMetric(e.commands, prometheus.CounterValue, parse(s, op+"_hits"), op, "hit")
-			ch <- prometheus.MustNewConstMetric(e.commands, prometheus.CounterValue, parse(s, op+"_misses"), op, "miss")
+		for _, op := range []string{"cmd_get", "cmd_del", "cmd_incr", "cmd_decr", "cmd_cas"} {
+			ch <- prometheus.MustNewConstMetric(e.commands, prometheus.CounterValue, parse(s, op), op, "hit")
+			ch <- prometheus.MustNewConstMetric(e.commands, prometheus.CounterValue, parse(s, op+"_miss"), op, "miss")
 		}
-		ch <- prometheus.MustNewConstMetric(e.commands, prometheus.CounterValue, parse(s, "cas_badval"), "cas", "badval")
-		ch <- prometheus.MustNewConstMetric(e.commands, prometheus.CounterValue, parse(s, "cmd_flush"), "flush", "hit")
 
-		// memcached includes cas operations again in cmd_set.
-		set := math.NaN()
-		if setCmd, err := strconv.ParseFloat(s["cmd_set"], 64); err == nil {
-			if cas, casErr := sum(s, "cas_misses", "cas_hits", "cas_badval"); casErr == nil {
-				set = setCmd - cas
-			} else {
-				log.Errorf("Failed to parse cas: %s", casErr)
-			}
-		} else {
-			log.Errorf("Failed to parse set %q: %s", s["cmd_set"], err)
-		}
-		ch <- prometheus.MustNewConstMetric(e.commands, prometheus.CounterValue, set, "set", "hit")
+		ch <- prometheus.MustNewConstMetric(e.pointerSize, prometheus.GaugeValue, parse(s, "pointer_size"))
+		ch <- prometheus.MustNewConstMetric(e.freeConnections, prometheus.GaugeValue, parse(s, "free_connection"))
+		ch <- prometheus.MustNewConstMetric(e.currentConnections, prometheus.GaugeValue, parse(s, "curr_connection"))
+		ch <- prometheus.MustNewConstMetric(e.connectionsTotal, prometheus.CounterValue, parse(s, "total_connection"))
+		ch <- prometheus.MustNewConstMetric(e.allocItemx, prometheus.GaugeValue, parse(s, "alloc_itemx"))
+		ch <- prometheus.MustNewConstMetric(e.freeItemx, prometheus.GaugeValue, parse(s, "free_itemx"))
+		ch <- prometheus.MustNewConstMetric(e.totalMemSlab, prometheus.GaugeValue, parse(s, "total_mem_slab"))
+		ch <- prometheus.MustNewConstMetric(e.freeMemSlab, prometheus.GaugeValue, parse(s, "free_mem_slab"))
+		ch <- prometheus.MustNewConstMetric(e.fullMemSlab, prometheus.GaugeValue, parse(s, "full_mem_slab"))
+		ch <- prometheus.MustNewConstMetric(e.partialMemSlab, prometheus.GaugeValue, parse(s, "partial_mem_slab"))
 
-		ch <- prometheus.MustNewConstMetric(e.currentBytes, prometheus.GaugeValue, parse(s, "bytes"))
-		ch <- prometheus.MustNewConstMetric(e.limitBytes, prometheus.GaugeValue, parse(s, "limit_maxbytes"))
-		ch <- prometheus.MustNewConstMetric(e.items, prometheus.GaugeValue, parse(s, "curr_items"))
-		ch <- prometheus.MustNewConstMetric(e.itemsTotal, prometheus.CounterValue, parse(s, "total_items"))
-
-		ch <- prometheus.MustNewConstMetric(e.bytesRead, prometheus.CounterValue, parse(s, "bytes_read"))
-		ch <- prometheus.MustNewConstMetric(e.bytesWritten, prometheus.CounterValue, parse(s, "bytes_written"))
-
-		ch <- prometheus.MustNewConstMetric(e.currentConnections, prometheus.GaugeValue, parse(s, "curr_connections"))
-		ch <- prometheus.MustNewConstMetric(e.connectionsTotal, prometheus.CounterValue, parse(s, "total_connections"))
-
-		ch <- prometheus.MustNewConstMetric(e.evictions, prometheus.CounterValue, parse(s, "evictions"))
-		ch <- prometheus.MustNewConstMetric(e.reclaimed, prometheus.CounterValue, parse(s, "reclaimed"))
-
-		ch <- prometheus.MustNewConstMetric(e.malloced, prometheus.GaugeValue, parse(s, "total_malloced"))
-
-		for slab, u := range t.Items {
-			slab := strconv.Itoa(slab)
-			ch <- prometheus.MustNewConstMetric(e.itemsNumber, prometheus.GaugeValue, parse(u, "number"), slab)
-			ch <- prometheus.MustNewConstMetric(e.itemsAge, prometheus.GaugeValue, parse(u, "age"), slab)
-			for m, d := range itemsMetrics {
-				if _, ok := u[m]; !ok {
-					continue
-				}
-				ch <- prometheus.MustNewConstMetric(d, prometheus.CounterValue, parse(u, m), slab)
-			}
-		}
+		ch <- prometheus.MustNewConstMetric(e.totalDiskSlab, prometheus.GaugeValue, parse(s, "total_disk_slab"))
+		ch <- prometheus.MustNewConstMetric(e.freeDiskSlab, prometheus.GaugeValue, parse(s, "free_disk_slab"))
+		ch <- prometheus.MustNewConstMetric(e.fullDiskSlab, prometheus.GaugeValue, parse(s, "full_disk_slab"))
+		ch <- prometheus.MustNewConstMetric(e.evictions, prometheus.CounterValue, parse(s, "evict_time"))
 
 		for slab, v := range t.Slabs {
 			slab := strconv.Itoa(slab)
 
-			for _, op := range []string{"get", "delete", "incr", "decr", "cas", "touch"} {
-				ch <- prometheus.MustNewConstMetric(e.slabsCommands, prometheus.CounterValue, parse(v, op+"_hits"), slab, op, "hit")
+			for _, op := range []string{"cmd_get", "cmd_set", "cmd_del", "cmd_incr", "cmd_decr", "cmd_cas"} {
+				ch <- prometheus.MustNewConstMetric(e.slabsCommands, prometheus.CounterValue, parse(v, op), slab, op, "hit", v["chunk_size"])
 			}
-			ch <- prometheus.MustNewConstMetric(e.slabsCommands, prometheus.CounterValue, parse(v, "cas_badval"), slab, "cas", "badval")
 
-			slabSet := math.NaN()
-			if slabSetCmd, err := strconv.ParseFloat(v["cmd_set"], 64); err == nil {
-				if slabCas, slabCasErr := sum(v, "cas_hits", "cas_badval"); slabCasErr == nil {
-					slabSet = slabSetCmd - slabCas
-				} else {
-					log.Errorf("Failed to parse cas: %s", slabCasErr)
-				}
-			} else {
-				log.Errorf("Failed to parse set %q: %s", v["cmd_set"], err)
-			}
-			ch <- prometheus.MustNewConstMetric(e.slabsCommands, prometheus.CounterValue, slabSet, slab, "set", "hit")
-
-			ch <- prometheus.MustNewConstMetric(e.slabsChunkSize, prometheus.GaugeValue, parse(v, "chunk_size"), slab)
-			ch <- prometheus.MustNewConstMetric(e.slabsChunksPerPage, prometheus.GaugeValue, parse(v, "chunks_per_page"), slab)
-			ch <- prometheus.MustNewConstMetric(e.slabsCurrentPages, prometheus.GaugeValue, parse(v, "total_pages"), slab)
-			ch <- prometheus.MustNewConstMetric(e.slabsCurrentChunks, prometheus.GaugeValue, parse(v, "total_chunks"), slab)
 			ch <- prometheus.MustNewConstMetric(e.slabsChunksUsed, prometheus.GaugeValue, parse(v, "used_chunks"), slab)
-			ch <- prometheus.MustNewConstMetric(e.slabsChunksFree, prometheus.GaugeValue, parse(v, "free_chunks"), slab)
-			ch <- prometheus.MustNewConstMetric(e.slabsChunksFreeEnd, prometheus.GaugeValue, parse(v, "free_chunks_end"), slab)
-			ch <- prometheus.MustNewConstMetric(e.slabsMemRequested, prometheus.GaugeValue, parse(v, "mem_requested"), slab)
+			ch <- prometheus.MustNewConstMetric(e.slabsChunkSize, prometheus.GaugeValue, parse(v, "chunk_size"), slab)
+			ch <- prometheus.MustNewConstMetric(e.slabsChunksPerSlab, prometheus.GaugeValue, parse(v, "chunks_per_slab"), slab)
+			ch <- prometheus.MustNewConstMetric(e.slabsSlack, prometheus.GaugeValue, parse(v, "slack"), slab)
+			ch <- prometheus.MustNewConstMetric(e.slabsTotalMemSlab, prometheus.CounterValue, parse(v, "total_mem_slab"), slab)
+			ch <- prometheus.MustNewConstMetric(e.slabsTotalDiskSlab, prometheus.CounterValue, parse(v, "total_disk_slab"), slab)
+			ch <- prometheus.MustNewConstMetric(e.slabsTotalEvictTime, prometheus.CounterValue, parse(v, "total_evict_time"), slab)
 		}
 	}
 
@@ -449,9 +522,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	if err != nil {
 		log.Errorf("Could not query stats settings: %s", err)
 	}
-	for _, settings := range statsSettings {
-		ch <- prometheus.MustNewConstMetric(e.maxConnections, prometheus.GaugeValue, parse(settings, "maxconns"))
-	}
+	fmt.Printf("%v", statsSettings)
 }
 
 func parse(stats map[string]string, key string) float64 {
